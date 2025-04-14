@@ -21,7 +21,7 @@ async def get_airport_code(city_name: str) -> str:
         "keyword": clean_city,
         "subType": "CITY,AIRPORT",
         "countryCode": "US",  # Add country code for US cities
-        "view": "FULL"  # Get full details
+        "page[limit]": 10,
     }
     
     async with httpx.AsyncClient() as client:
@@ -36,7 +36,24 @@ async def get_airport_code(city_name: str) -> str:
             locations = data.get("data", [])
             
             if not locations:
-                raise Exception(f"Could not find airport code for city: {city_name}")
+                common_airports = {
+                    "new york": "JFK",
+                    "los angeles": "LAX",
+                    "chicago": "ORD",
+                    "san francisco": "SFO",
+                    "miami": "MIA",
+                    "dallas": "DFW",
+                    "houston": "IAH",
+                    "atlanta": "ATL",
+                    "washington d.c.": "DCA",
+                    "boston": "BOS"
+                }
+                
+                for city_key, code in common_airports.items():
+                    if city_key in clean_city.lower():
+                        return code
+                
+                return clean_city[:3].upper()  # Last resort fallback
             
             # Try to find the most relevant airport
             for location in locations:
@@ -47,7 +64,16 @@ async def get_airport_code(city_name: str) -> str:
             # If no airport found, return the first city's code
             return locations[0].get("iataCode", locations[0].get("id"))
             
-        raise Exception(f"Could not find airport code for city: {city_name}")
+        error_detail = f"API Error: {response.status_code}"
+        try:
+            error_detail += f" - {response.json()}"
+        except:
+            error_detail += f" - {response.text}"
+            
+        print(f"Airport lookup error: {error_detail}")
+        
+        # Fallback to a simple abbreviation if API fails
+        return city_name.strip().upper()[:3]
 
 async def get_access_token() -> str:
     params = {

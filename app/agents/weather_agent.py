@@ -11,8 +11,8 @@ async def get_weather(city: str, start_date: str, end_date: str) -> dict:
     end = datetime.strptime(end_date, "%Y-%m-%d").date()
 
     try:
-        if (start - today).days <= 7:
-            end = min(end, today + timedelta(days=7))
+        if (start - today).days <= 10:
+            end = min(end, today + timedelta(days=10))
             return await fetch_forecast(city, start, end)
         else:
             return await fetch_historical(city, start, end)

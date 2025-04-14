@@ -8,61 +8,79 @@ AMADEUS_API_URL = "https://test.api.amadeus.com/v2"
 TOKEN_URL = "https://test.api.amadeus.com/v1/security/oauth2/token"
 
 def simplify_flight_data(flight_data: dict) -> dict:
-    """Simplify the flight data to include only essential information."""
+    """Simplify the flight data to include only essential information, preserving all connections."""
     simplified_flights = []
     
     for flight in flight_data.get("data", []):
-        outbound = flight["itineraries"][0]["segments"][0]
-        return_flight = flight["itineraries"][1]["segments"][-1]  # Get the last segment of return
+        # Get all segments for outbound and return journeys
+        outbound_segments = flight["itineraries"][0]["segments"]
+        return_segments = flight["itineraries"][1]["segments"]
         
         # Convert price to USD if needed
         price = flight["price"]
         if price["currency"] != "USD":
-            # Note: In a real application, you would want to use a currency conversion API
-            # For now, we'll just set it to USD and keep the same amount
             price["currency"] = "USD"
         
+        # Process all outbound segments
+        processed_outbound = []
+        for segment in outbound_segments:
+            processed_outbound.append({
+                "departure": {
+                    "airport": segment["departure"]["iataCode"],
+                    "time": segment["departure"]["at"],
+                    "terminal": segment["departure"].get("terminal", "")
+                },
+                "arrival": {
+                    "airport": segment["arrival"]["iataCode"],
+                    "time": segment["arrival"]["at"],
+                    "terminal": segment["arrival"].get("terminal", "")
+                },
+                "duration": segment["duration"],
+                "airline": segment.get("carrierCode", flight["validatingAirlineCodes"][0]),
+                "flight_number": segment["number"]
+            })
+        
+        # Process all return segments
+        processed_return = []
+        for segment in return_segments:
+            processed_return.append({
+                "departure": {
+                    "airport": segment["departure"]["iataCode"],
+                    "time": segment["departure"]["at"],
+                    "terminal": segment["departure"].get("terminal", "")
+                },
+                "arrival": {
+                    "airport": segment["arrival"]["iataCode"],
+                    "time": segment["arrival"]["at"],
+                    "terminal": segment["arrival"].get("terminal", "")
+                },
+                "duration": segment["duration"],
+                "airline": segment.get("carrierCode", flight["validatingAirlineCodes"][0]),
+                "flight_number": segment["number"]
+            })
+        
+        # Create the simplified flight with all segments
         simplified_flight = {
             "price": {
                 "total": price["total"],
-                "currency": "USD"  # Always set to USD
+                "currency": "USD"
             },
             "outbound": {
-                "departure": {
-                    "airport": outbound["departure"]["iataCode"],
-                    "time": outbound["departure"]["at"],
-                    "terminal": outbound["departure"].get("terminal", "")
-                },
-                "arrival": {
-                    "airport": outbound["arrival"]["iataCode"],
-                    "time": outbound["arrival"]["at"],
-                    "terminal": outbound["arrival"].get("terminal", "")
-                },
-                "duration": outbound["duration"],
-                "airline": flight["validatingAirlineCodes"][0],
-                "flight_number": outbound["number"]
+                "segments": processed_outbound,
+                "total_duration": flight["itineraries"][0].get("duration", ""),
+                "stops": len(processed_outbound) - 1
             },
             "return": {
-                "departure": {
-                    "airport": return_flight["departure"]["iataCode"],
-                    "time": return_flight["departure"]["at"],
-                    "terminal": return_flight["departure"].get("terminal", "")
-                },
-                "arrival": {
-                    "airport": return_flight["arrival"]["iataCode"],
-                    "time": return_flight["arrival"]["at"],
-                    "terminal": return_flight["arrival"].get("terminal", "")
-                },
-                "duration": return_flight["duration"],
-                "airline": flight["validatingAirlineCodes"][0],
-                "flight_number": return_flight["number"]
+                "segments": processed_return,
+                "total_duration": flight["itineraries"][1].get("duration", ""),
+                "stops": len(processed_return) - 1
             }
         }
         simplified_flights.append(simplified_flight)
     
     return {
         "flights": simplified_flights,
-        "total_offers": flight_data["meta"]["count"]
+        "total_offers": flight_data.get("meta", {}).get("count", len(simplified_flights))
     }
 
 async def get_flight_offers(origin: str, destination: str, departure_date: str, return_date: str) -> dict:
@@ -99,21 +117,53 @@ async def get_flight_offers(origin: str, destination: str, departure_date: str, 
         "Content-Type": "application/json"
     }
     
-    params = {
-        "originLocationCode": origin_code,
-        "destinationLocationCode": destination_code,
-        "departureDate": departure_date,
-        "returnDate": return_date,
-        "adults": 1,
-        "max": 5,
-        "currencyCode": "USD"  # Request prices in USD
+    # Create the request body as required by the Amadeus API
+    request_body = {
+        "currencyCode": "USD",
+        "originDestinations": [
+            {
+                "id": "1",
+                "originLocationCode": origin_code,
+                "destinationLocationCode": destination_code,
+                "departureDateTimeRange": {
+                    "date": departure_date
+                }
+            },
+            {
+                "id": "2",
+                "originLocationCode": destination_code,
+                "destinationLocationCode": origin_code,
+                "departureDateTimeRange": {
+                    "date": return_date
+                }
+            }
+        ],
+        "travelers": [
+            {
+                "id": "1",
+                "travelerType": "ADULT"
+            }
+        ],
+        "sources": ["GDS"],
+        "searchCriteria": {
+            "maxFlightOffers": 5,
+            "flightFilters": {
+                "cabinRestrictions": [
+                    {
+                        "cabin": "ECONOMY",
+                        "coverage": "MOST_SEGMENTS",
+                        "originDestinationIds": ["1", "2"]
+                    }
+                ]
+            }
+        }
     }
     
     async with httpx.AsyncClient() as client:
-        response = await client.get(
+        response = await client.post(
             f"{AMADEUS_API_URL}/shopping/flight-offers",
             headers=headers,
-            params=params
+            json=request_body,
         )
         
         if response.status_code == 200:
@@ -153,4 +203,4 @@ async def get_access_token() -> str:
         if response.status_code == 200:
             return response.json()["access_token"]
         else:
-            raise Exception("Failed to get access token from Amadeus API") 
+            raise Exception("Failed to get access token from Amadeus API")
